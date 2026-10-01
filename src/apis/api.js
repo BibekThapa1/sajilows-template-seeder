@@ -55,6 +55,10 @@ const APIS = {
         "get":"/api/v1/home-page/benefits/",
         "post":"/api/v1/home-page/benefits/",
     },
+    facilities_home_page: {
+        "get":"/api/v1/home-page/facilities-home-page/",
+        "post":"/api/v1/home-page/facilities-home-page/",
+    }
 }
 
 export { APIS }

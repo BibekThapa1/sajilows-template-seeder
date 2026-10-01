@@ -8,10 +8,12 @@ import roomTypes from "./mock/rooms/room-type/mock.js";
 import rooms from "./mock/rooms/rooms/mock.js";
 import floors from "./mock/rooms/room-floor/mock.js";
 import facilities from "./mock/facilities/mock.js";
+import facilitiesPage from "./mock/facilities-page/mock.js";
 import galleryCategories from "./mock/gallery/gallery-category/mock.js";
 import galleryImages from "./mock/gallery/gallery-images/mock.js";
 import awards from "./mock/awards_and_recognition/mock.js";
 import testimonials from "./mock/testemonials/mock.js";
+import benefits from "./mock/benefits/mock.js";
 
 const isImageField = (key, value) =>
   /image/i.test(key) && typeof value === "string" && value.length > 0;
@@ -68,10 +70,12 @@ const automateFunction = async (backendUrl, forwardedHost) => {
     [APIS.floors.post, floors],
     [APIS.rooms.post, rooms],
     [APIS.room_image.post, roomImageRecords],
-    [APIS.facilities.post, facilities],
+    [APIS.facilities.post, facilitiesPage],
+    [APIS.facilities_home_page.post, facilities],
     [APIS.gallery_category.post, galleryCategories],
     [APIS.gallery_images.post, galleryImageRecords],
     [APIS.awards_and_recognition.post, awards],
+    [APIS.benefits.post, benefits],
     [APIS.testimonials.post, testimonials],
   ];
   const result = { posted: 0, failures: [], skipped: [] };

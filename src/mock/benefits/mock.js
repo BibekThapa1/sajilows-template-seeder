@@ -30,3 +30,5 @@ const Benefits = [
         "is_visible":"True",
     }
 ]
+
+export default Benefits

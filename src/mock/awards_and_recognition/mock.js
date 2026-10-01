@@ -1,4 +1,4 @@
-import img1 from "../../../public/common/awards/1.png"
+const img1 = "/common/awards/1.png"
 
 const awards = [
     {
