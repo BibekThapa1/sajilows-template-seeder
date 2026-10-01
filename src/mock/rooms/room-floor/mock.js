@@ -8,6 +8,9 @@ const RoomFloor = [
     {
         "name":"Second Floor",
     }
+    ,{
+        "name":"Third Floor",
+    }
 ]
 
 export default RoomFloor

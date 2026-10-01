@@ -19,100 +19,291 @@ const isImageField = (key, value) =>
   /image/i.test(key) && typeof value === "string" && value.length > 0;
 
 const toRequestBody = async (record) => {
-  const imageFields = Object.entries(record).filter(([key, value]) =>
-    isImageField(key, value),
-  );
-
-  if (imageFields.length === 0) {
-    return record;
-  }
+  if (!Object.entries(record).some(([key, value]) => isImageField(key, value))) return record;
 
   const formData = new FormData();
   for (const [key, value] of Object.entries(record)) {
     if (isImageField(key, value)) {
       const response = await fetch(value);
-      if (!response.ok) {
-        throw new Error(`Could not load image ${value}: ${response.status}`);
-      }
-
-      const filename = value.split("/").pop() || `${key}.bin`;
-      formData.append(key, await response.blob(), filename);
+      if (!response.ok) throw new Error(`Could not load image ${value}: ${response.status}`);
+      formData.append(key, await response.blob(), value.split("/").pop() || `${key}.bin`);
     } else if (Array.isArray(value) || (value && typeof value === "object")) {
       formData.append(key, JSON.stringify(value));
     } else {
       formData.append(key, String(value));
     }
   }
-
   return formData;
 };
 
-const automateFunction = async (backendUrl, forwardedHost) => {
-  const baseUrl = backendUrl.trim().replace(/\/+$/, "");
-  const menuItemRecords = Object.entries(menuItems).flatMap(
-    ([, items], index) =>
-      items.map((item) => ({ ...item, category: index + 1 })),
-  );
-  const galleryImageRecords = Object.entries(galleryImages).flatMap(
-    ([, images], index) =>
-      images.map((image) => ({ ...image, category: index + 1 })),
-  );
-  const roomImageRecords = rooms.map((room, index) => ({
-    room: index + 1,
-    image: room.main_image,
-  }));
-  const endpointRecords = [
-    [APIS.menu_category.post, menuCategories],
-    [APIS.menu_items.post, menuItemRecords],
-    [APIS.room_facilities_categories.post, roomFacilityCategories],
-    [APIS.room_facilities_items.post, roomFacilityItems],
-    [APIS.room_type.post, roomTypes],
-    [APIS.floors.post, floors],
-    [APIS.rooms.post, rooms],
-    [APIS.room_image.post, roomImageRecords],
-    [APIS.facilities.post, facilitiesPage],
-    [APIS.facilities_home_page.post, facilities],
-    [APIS.gallery_category.post, galleryCategories],
-    [APIS.gallery_images.post, galleryImageRecords],
-    [APIS.awards_and_recognition.post, awards],
-    [APIS.benefits.post, benefits],
-    [APIS.testimonials.post, testimonials],
-  ];
-  const result = { posted: 0, failures: [], skipped: [] };
+const automateFunction = async (backendUrl, forwardedHost, onProgress) => {
+  const inputUrl = backendUrl.trim().replace(/\/+$/, "");
+  const baseUrl = /^https?:\/\//i.test(inputUrl) ? inputUrl : `https://${inputUrl}`;
+  const tenantHost = forwardedHost || "templates-api.hamroyouthit.com";
+  const requestConfig = {
+    headers: {
+      Authorization: `Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzkxMDE4MTk2LCJpYXQiOjE3OTA4NDUzOTYsImp0aSI6IjkwYjA3YmUwMDI2MDQyYzZhOTAxOWVhNDI0MTJiYzFiIiwidXNlcl9pZCI6IjEifQ.3bhikVHSG9BopL5OIhzUzoSYzSIYW2eLJn-pv03lod4`,
+      "x-forwarded-host": tenantHost,
+      "x-tenant-domain": tenantHost,
+    },
+  };
+  const requestUrl = (endpoint) => new URL(endpoint, `${baseUrl}/`).toString();
+  const result = { posted: 0, failures: [], blockers: [], fallbacks: [], skipped: [], endpointResults: [] };
+  const notify = (event) => onProgress?.(event);
+  const identity = (record) => record.name ?? record.title ?? record.room_number?.toString();
 
-  for (const [endpoint, records] of endpointRecords) {
-    if (records.length === 0) {
-      result.skipped.push(endpoint);
-      continue;
+  const endpointSummary = (endpoint) => {
+    let summary = result.endpointResults.find((item) => item.endpoint === endpoint);
+    if (!summary) {
+      summary = { endpoint, attempted: 0, posted: 0, failed: 0, skipped: 0 };
+      result.endpointResults.push(summary);
+    }
+    return summary;
+  };
+
+  const getId = (value) => {
+    if (!value || typeof value !== "object") return undefined;
+    for (const key of ["id", "pk", "uuid"]) {
+      if (value[key] !== undefined && value[key] !== null) return value[key];
+    }
+    for (const key of ["data", "result", "item", "record"]) {
+      const id = getId(value[key]);
+      if (id !== undefined) return id;
+    }
+    return undefined;
+  };
+
+  const extractRecords = (value) => {
+    if (Array.isArray(value)) return value;
+    if (!value || typeof value !== "object") return [];
+    for (const key of ["results", "data", "items", "records"]) {
+      const records = extractRecords(value[key]);
+      if (records.length) return records;
+    }
+    return [];
+  };
+
+  const getEndpoint = (postEndpoint) =>
+    Object.values(APIS).find((api) => api.post === postEndpoint)?.get ?? postEndpoint;
+  const errorDetails = (error) => {
+    const data = error.response?.data;
+    let message = data?.detail ?? data?.message ?? data;
+    if (message && typeof message !== "string") message = JSON.stringify(message);
+    return {
+      status: error.response?.status,
+      message: message || error.message || "Request failed without an error message",
+    };
+  };
+
+  const collectionCache = new Map();
+  const fetchAllRecords = async (postEndpoint) => {
+    if (collectionCache.has(postEndpoint)) return collectionCache.get(postEndpoint);
+    const records = [];
+    let url = requestUrl(getEndpoint(postEndpoint));
+    let pageCount = 0;
+    try {
+      while (url && pageCount < 100) {
+        const response = await axios.get(url, requestConfig);
+        records.push(...extractRecords(response.data));
+        url = response.data?.next ? new URL(response.data.next, url).toString() : null;
+        pageCount += 1;
+      }
+      collectionCache.set(postEndpoint, records);
+    } catch (error) {
+      const details = errorDetails(error);
+      result.failures.push({ endpoint: getEndpoint(postEndpoint), method: "GET", ...details });
+      notify({ type: "request-failure", endpoint: getEndpoint(postEndpoint), method: "GET", ...details });
+      collectionCache.set(postEndpoint, []);
+    }
+    return collectionCache.get(postEndpoint);
+  };
+
+  const randomId = (records) => {
+    const ids = records.map(getId).filter((id) => id !== undefined);
+    return ids.length ? ids[Math.floor(Math.random() * ids.length)] : undefined;
+  };
+
+  const postRecords = async (endpoint, records, skipReason = "No eligible records to send.") => {
+    const idByName = new Map();
+    const unresolved = new Set();
+    const summary = endpointSummary(endpoint);
+    if (!records.length) {
+      result.skipped.push({ endpoint, reason: skipReason });
+      summary.skipped += 1;
+      notify({ type: "endpoint-skipped", endpoint, reason: skipReason });
+      return idByName;
     }
 
+    notify({ type: "endpoint-start", endpoint, total: records.length });
     for (const record of records) {
-      console.log(baseUrl);
-
+      const name = identity(record) ?? "Unnamed record";
+      summary.attempted += 1;
       try {
-        console.log(`https://${baseUrl}${endpoint}`, "record");
-          const body = await toRequestBody(record);
-
-          await axios.post(`https://${baseUrl}${endpoint}`, body, {
-          headers: {
-            Authorization: `Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzkxMDE4MTk2LCJpYXQiOjE3OTA4NDUzOTYsImp0aSI6IjkwYjA3YmUwMDI2MDQyYzZhOTAxOWVhNDI0MTJiYzFiIiwidXNlcl9pZCI6IjEifQ.3bhikVHSG9BopL5OIhzUzoSYzSIYW2eLJn-pv03lod4`,
-            "x-forwarded-host":
-              forwardedHost || "templates-api.hamroyouthit.com",
-            "x-tenant-domain":
-              forwardedHost || "templates-api.hamroyouthit.com",
-          },
-        });
+        const response = await axios.post(requestUrl(endpoint), await toRequestBody(record), requestConfig);
         result.posted += 1;
+        summary.posted += 1;
+        notify({ type: "request-success", endpoint, record: name, completed: summary.posted + summary.failed, total: records.length });
+        const id = getId(response.data);
+        if (id !== undefined && identity(record) !== undefined) idByName.set(identity(record), id);
+        else if (identity(record) !== undefined) unresolved.add(identity(record));
       } catch (error) {
-        result.failures.push({
-          endpoint,
-          record,
-          message: error.response?.data?.detail || error.message,
-        });
+        const details = errorDetails(error);
+        summary.failed += 1;
+        result.failures.push({ endpoint, record: name, ...details });
+        notify({ type: "request-failure", endpoint, record: name, ...details, completed: summary.posted + summary.failed, total: records.length });
+        if (identity(record) !== undefined) unresolved.add(identity(record));
       }
     }
-  }
 
+    if (unresolved.size) {
+      try {
+        const existing = await fetchAllRecords(endpoint);
+        for (const saved of existing) {
+          const name = identity(saved);
+          const id = getId(saved);
+          if (name !== undefined && id !== undefined && !idByName.has(name)) idByName.set(name, id);
+        }
+        for (const name of unresolved) {
+          if (idByName.has(name)) {
+            const fallback = {
+              endpoint,
+              record: name,
+              id: idByName.get(name),
+              message: `Using matching existing record ID ${idByName.get(name)} fetched from the backend.`,
+            };
+            result.fallbacks.push(fallback);
+            notify({ type: "foreign-key-fallback", ...fallback });
+            continue;
+          }
+          const id = randomId(existing);
+          if (id === undefined) {
+            const failure = { endpoint, method: "GET", record: name, message: "GET returned no records with IDs; no valid foreign key is available." };
+            result.failures.push(failure);
+            notify({ type: "request-failure", ...failure });
+            continue;
+          }
+          idByName.set(name, id);
+          const fallback = { endpoint, record: name, id, message: `Using randomly selected existing ID ${id} after resolving the collection with GET.` };
+          result.fallbacks.push(fallback);
+          notify({ type: "foreign-key-fallback", ...fallback });
+        }
+      } catch (error) {
+        const details = errorDetails(error);
+        result.failures.push({ endpoint, method: "GET", ...details, message: `Could not fetch existing records for foreign-key recovery: ${details.message}` });
+        notify({ type: "request-failure", endpoint, method: "GET", ...details });
+      }
+    }
+    notify({ type: "endpoint-complete", ...summary });
+    return idByName;
+  };
+
+  const menuCategoryIds = await postRecords(APIS.menu_category.post, menuCategories);
+  let existingMenuCategories = [];
+  if (menuCategories.some(({ name }) => !menuCategoryIds.has(name))) {
+    existingMenuCategories = await fetchAllRecords(APIS.menu_category.post);
+  }
+  const menuItemRecords = [];
+  for (const [categoryName, items] of Object.entries(menuItems)) {
+    const matching = existingMenuCategories.find((category) => category.name === categoryName);
+    const categoryId = menuCategoryIds.get(categoryName) ?? getId(matching) ?? randomId(existingMenuCategories);
+    if (categoryId === undefined) {
+      result.failures.push({ endpoint: APIS.menu_items.post, record: categoryName, message: `GET returned no menu category IDs for ${categoryName}.` });
+      continue;
+    }
+    if (!menuCategoryIds.has(categoryName)) {
+      const fallback = { endpoint: APIS.menu_category.post, record: categoryName, id: categoryId, message: `Using existing menu category ID ${categoryId} after GET fallback.` };
+      result.fallbacks.push(fallback);
+      notify({ type: "foreign-key-fallback", ...fallback });
+    }
+    menuItemRecords.push(...items.map((item) => ({ ...item, category: categoryId })));
+  }
+  const menuItemIds = await postRecords(APIS.menu_items.post, menuItemRecords, "Menu items could not be built because no menu category IDs were available.");
+
+  const roomFacilityCategoryIds = await postRecords(APIS.room_facilities_categories.post, roomFacilityCategories);
+  const roomFacilityItemRecords = [];
+  let existingRoomFacilityCategories = [];
+  if (roomFacilityItems.some(({ category }) => !roomFacilityCategoryIds.has(category))) {
+    existingRoomFacilityCategories = await fetchAllRecords(APIS.room_facilities_categories.post);
+  }
+  for (const item of roomFacilityItems) {
+    let categoryId = roomFacilityCategoryIds.get(item.category);
+    if (categoryId === undefined) {
+      categoryId = getId(existingRoomFacilityCategories.find((category) => category.name === item.category)) ?? randomId(existingRoomFacilityCategories);
+      if (categoryId !== undefined) {
+        const fallback = { endpoint: APIS.room_facilities_categories.post, record: item.category, id: categoryId, message: `Using existing room-facility category ID ${categoryId} after GET fallback.` };
+        result.fallbacks.push(fallback);
+        notify({ type: "foreign-key-fallback", ...fallback });
+      }
+    }
+    if (categoryId === undefined) {
+      result.failures.push({ endpoint: APIS.room_facilities_items.post, record: item.name, message: `No category ID available for ${item.category}.` });
+      continue;
+    }
+    roomFacilityItemRecords.push({ ...item, category: categoryId });
+  }
+  const roomFacilityItemIds = await postRecords(APIS.room_facilities_items.post, roomFacilityItemRecords, "Room-facility items could not be built because no category IDs were available.");
+
+  const roomTypeIds = await postRecords(APIS.room_type.post, roomTypes);
+  const floorIds = await postRecords(APIS.floors.post, floors);
+  let existingRoomTypes = [];
+  let existingFloors = [];
+  let existingFacilityItems = [];
+  let existingMenuItems = [];
+  if (rooms.some((room) => !roomTypeIds.has(room.room_type_name))) existingRoomTypes = await fetchAllRecords(APIS.room_type.post);
+  if (rooms.some((room) => !floorIds.has(room.floor_name))) existingFloors = await fetchAllRecords(APIS.floors.post);
+  if (rooms.some((room) => room.facility_names.some((name) => !roomFacilityItemIds.has(name)))) existingFacilityItems = await fetchAllRecords(APIS.room_facilities_items.post);
+  if (rooms.some((room) => room.menu_item_names.some((name) => !menuItemIds.has(name)))) existingMenuItems = await fetchAllRecords(APIS.menu_items.post);
+  const roomRecords = [];
+
+  for (const room of rooms) {
+    const roomTypeId = roomTypeIds.get(room.room_type_name) ?? getId(existingRoomTypes.find((item) => item.name === room.room_type_name)) ?? randomId(existingRoomTypes);
+    const floorId = floorIds.get(room.floor_name) ?? getId(existingFloors.find((item) => item.name === room.floor_name)) ?? randomId(existingFloors);
+    const facilityIds = room.facility_names.map((name) => roomFacilityItemIds.get(name) ?? getId(existingFacilityItems.find((item) => item.name === name)) ?? randomId(existingFacilityItems));
+    const menuIds = room.menu_item_names.map((name) => menuItemIds.get(name) ?? getId(existingMenuItems.find((item) => item.name === name)) ?? randomId(existingMenuItems));
+    if (roomTypeId === undefined || floorId === undefined || facilityIds.includes(undefined) || menuIds.includes(undefined)) {
+      const missing = [roomTypeId === undefined && "room type", floorId === undefined && "floor", facilityIds.includes(undefined) && "facility", menuIds.includes(undefined) && "menu item"].filter(Boolean);
+      result.failures.push({ endpoint: APIS.rooms.post, record: room.name, message: `No backend records with IDs were returned for: ${missing.join(", ")}.` });
+      notify({ type: "dependency-blocked", endpoint: APIS.rooms.post, record: room.name, reason: `GET returned no valid ID for ${missing.join(", ")}.` });
+      continue;
+    }
+    roomRecords.push({
+      name: room.name,
+      price: room.price,
+      capacity: room.capacity,
+      room_number: room.room_number,
+      is_visible: room.is_visible,
+      room_type: roomTypeId,
+      floor: floorId,
+      facilities: facilityIds,
+      menu_items: menuIds,
+    });
+  }
+  const roomIds = await postRecords(APIS.rooms.post, roomRecords, "Rooms were blocked because GET returned no usable related IDs.");
+  let existingRooms = [];
+  if (rooms.some((room) => !roomIds.has(room.name))) existingRooms = await fetchAllRecords(APIS.rooms.post);
+  const roomImageRecords = rooms.flatMap((room) => {
+    const roomId = roomIds.get(room.name) ?? getId(existingRooms.find((saved) => saved.name === room.name)) ?? randomId(existingRooms);
+    return roomId === undefined ? [] : [{ room: roomId, image: room.main_image }];
+  });
+  await postRecords(APIS.room_image.post, roomImageRecords, "Room images were blocked because GET returned no room IDs.");
+
+  await postRecords(APIS.facilities.post, facilitiesPage);
+  await postRecords(APIS.facilities_home_page.post, facilities);
+
+  const galleryCategoryIds = await postRecords(APIS.gallery_category.post, galleryCategories);
+  let existingGalleryCategories = [];
+  if (Object.keys(galleryImages).some((name) => !galleryCategoryIds.has(name))) {
+    existingGalleryCategories = await fetchAllRecords(APIS.gallery_category.post);
+  }
+  const galleryImageRecords = Object.entries(galleryImages).flatMap(([categoryName, images]) => {
+    const categoryId = galleryCategoryIds.get(categoryName) ?? getId(existingGalleryCategories.find((saved) => saved.name === categoryName)) ?? randomId(existingGalleryCategories);
+    return categoryId === undefined ? [] : images.map((image) => ({ ...image, category: categoryId }));
+  });
+  await postRecords(APIS.gallery_images.post, galleryImageRecords, "Gallery images were blocked because GET returned no category IDs.");
+
+  await postRecords(APIS.awards_and_recognition.post, awards);
+  await postRecords(APIS.benefits.post, benefits);
+  await postRecords(APIS.testimonials.post, testimonials);
   return result;
 };
 

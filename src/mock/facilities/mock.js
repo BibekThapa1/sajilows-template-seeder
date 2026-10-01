@@ -1,4 +1,4 @@
-import img1 from "../../../public/common/facilities/wifi.png"
+import img1 from "../../../public/common/facilities/wifi1.png"
 import img2 from "../../../public/common/facilities/swimming.png"
 import img3 from "../../../public/common/facilities/resturant.png"
 import img4 from "../../../public/common/facilities/spa.png"

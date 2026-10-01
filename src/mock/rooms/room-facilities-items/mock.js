@@ -1,35 +1,35 @@
 const RoomFacilitiesItems = [
     {
         "name":"Shower",
-        "category":1
+        "category":"Bathroom"
     },
     {
         "name":"Bathtub",
-        "category":1
+        "category":"Bathroom"
     },
     {
         "name":"Toilet",
-        "category":2
+        "category":"Toilet"
     },
     {
         "name":"Sink",
-        "category":3
+        "category":"Sink"
     },
     {
         "name":"Microwave",
-        "category":4
+        "category":"Kitchen"
     },
     {
         "name":"Refrigerator",
-        "category":4
+        "category":"Kitchen"
     },
     {
         "name":"Oven",
-        "category":4
+        "category":"Kitchen"
     },
     {
         "name":"Stove",
-        "category":4
+        "category":"Kitchen"
     }
 ]
 

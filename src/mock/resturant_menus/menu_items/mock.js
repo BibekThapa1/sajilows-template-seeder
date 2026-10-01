@@ -1,13 +1,13 @@
 const menuItems = {
   Appetizers: [
     {
-      name: "something",
+      name: "Avocado Toast",
       price: 100,
       type: "veg",
       is_visible: "True",
     },
     {
-      name: "something",
+      name: "Tomato Soup",
       price: 100,
       type: "veg",
       is_visible: "True",
@@ -15,13 +15,13 @@ const menuItems = {
   ],
   Desserts: [
     {
-      name: "something",
+      name: "Cheesecake",
       price: 100,
       type: "veg",
       is_visible: "True",
     },
     {
-      name: "something",
+      name: "Chocolate Mousse",
       price: 100,
       type: "veg",
       is_visible: "True",
@@ -29,13 +29,13 @@ const menuItems = {
   ],
   Beverages: [
     {
-      name: "something",
+      name: "Fresh Lemonade",
       price: 100,
       type: "veg",
       is_visible: "True",
     },
     {
-      name: "something",
+      name: "Espresso",
       price: 100,
       type: "veg",
       is_visible: "True",
