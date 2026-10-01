@@ -27,6 +27,10 @@ const toRequestBody = async (record) => {
       const response = await fetch(value);
       if (!response.ok) throw new Error(`Could not load image ${value}: ${response.status}`);
       formData.append(key, await response.blob(), value.split("/").pop() || `${key}.bin`);
+    } else if ((key === "facilities" || key === "menu_items") && Array.isArray(value)) {
+      for (const id of value) {
+        formData.append(`${key}[]`, String(id));
+      }
     } else if (Array.isArray(value) || (value && typeof value === "object")) {
       formData.append(key, JSON.stringify(value));
     } else {
@@ -268,6 +272,7 @@ const automateFunction = async (backendUrl, forwardedHost, onProgress) => {
     }
     roomRecords.push({
       name: room.name,
+      main_image: room.main_image,
       price: room.price,
       capacity: room.capacity,
       room_number: room.room_number,
