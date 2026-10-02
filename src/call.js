@@ -40,13 +40,41 @@ const toRequestBody = async (record) => {
   return formData;
 };
 
-const automateFunction = async (backendUrl, forwardedHost, onProgress) => {
+const normalizeBaseUrl = (backendUrl) => {
   const inputUrl = backendUrl.trim().replace(/\/+$/, "");
-  const baseUrl = /^https?:\/\//i.test(inputUrl) ? inputUrl : `https://${inputUrl}`;
-  const tenantHost = forwardedHost || "templates-api.hamroyouthit.com";
+  return /^https?:\/\//i.test(inputUrl) ? inputUrl : `https://${inputUrl}`;
+};
+
+const normalizeTenantHost = (forwardedHost, baseUrl) => {
+  const tenantHost = forwardedHost
+    .trim()
+    .replace(/^https?:\/\//i, "")
+    .split("/")[0];
+  return tenantHost || new URL(baseUrl).host;
+};
+
+export const authorize = async (backendUrl, loginEndpoint, email, password, forwardedHost) => {
+  const baseUrl = normalizeBaseUrl(backendUrl);
+  const tenantHost = normalizeTenantHost(forwardedHost, baseUrl);
+  const response = await axios.post(
+    new URL(loginEndpoint, `${baseUrl}/`).toString(),
+    { email, password },
+    { headers: { "x-forwarded-host": tenantHost, "x-tenant-domain": tenantHost } },
+  );
+  const payload = response.data?.data ?? response.data;
+  const accessToken = payload?.access;
+  if (!accessToken) {
+    throw new Error(payload?.message || "Login response did not contain an access token.");
+  }
+  return { accessToken, user: payload.user, client: payload.client };
+};
+
+const automateFunction = async (backendUrl, forwardedHost, accessToken, onProgress) => {
+  const baseUrl = normalizeBaseUrl(backendUrl);
+  const tenantHost = normalizeTenantHost(forwardedHost, baseUrl);
   const requestConfig = {
     headers: {
-      Authorization: `Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzkxMDE4MTk2LCJpYXQiOjE3OTA4NDUzOTYsImp0aSI6IjkwYjA3YmUwMDI2MDQyYzZhOTAxOWVhNDI0MTJiYzFiIiwidXNlcl9pZCI6IjEifQ.3bhikVHSG9BopL5OIhzUzoSYzSIYW2eLJn-pv03lod4`,
+      Authorization: `Bearer ${accessToken}`,
       "x-forwarded-host": tenantHost,
       "x-tenant-domain": tenantHost,
     },
@@ -311,5 +339,127 @@ const automateFunction = async (backendUrl, forwardedHost, onProgress) => {
   await postRecords(APIS.testimonials.post, testimonials);
   return result;
 };
+
+export const deleteAllData = async (backendUrl, forwardedHost, accessToken, onProgress) => {
+  const baseUrl = normalizeBaseUrl(backendUrl)
+  const tenantHost = normalizeTenantHost(forwardedHost, baseUrl)
+  const requestConfig = {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'x-forwarded-host': tenantHost,
+      'x-tenant-domain': tenantHost,
+    },
+  }
+  const requestUrl = (endpoint) => new URL(endpoint, `${baseUrl}/`).toString()
+  const result = { deleted: 0, failures: [], endpointResults: [] }
+  const notify = (event) => onProgress?.(event)
+  const endpoints = [
+    APIS.room_image,
+    APIS.rooms,
+    APIS.room_facilities_items,
+    APIS.room_facilities_categories,
+    APIS.menu_items,
+    APIS.menu_category,
+    APIS.gallery_images,
+    APIS.gallery_category,
+    APIS.facilities,
+    APIS.facilities_home_page,
+    APIS.awards_and_recognition,
+    APIS.benefits,
+    APIS.testimonials,
+    APIS.room_type,
+    APIS.floors,
+  ]
+  const extractRecords = (value) => {
+    if (Array.isArray(value)) return value
+    if (!value || typeof value !== 'object') return []
+    for (const child of Object.values(value)) {
+      if (Array.isArray(child)) return child
+      const found = extractRecords(child)
+      if (found.length) return found
+    }
+    return []
+  }
+  const getRecordId = (record) => record?.id ?? record?.pk ?? record?.uuid
+  const errorMessage = (error) => {
+    const detail = error.response?.data?.detail ?? error.response?.data?.message ?? error.response?.data
+    return typeof detail === 'string' ? detail : detail ? JSON.stringify(detail) : error.message
+  }
+
+  for (const api of endpoints) {
+    const endpoint = api.get
+    const rows = []
+    let url = requestUrl(api.get)
+    let page = 0
+
+    try {
+      while (url && page < 100) {
+        const response = await axios.get(url, requestConfig)
+        rows.push(...extractRecords(response.data))
+        url = response.data?.next ? new URL(response.data.next, url).toString() : null
+        page += 1
+      }
+    } catch (error) {
+      const failure = { endpoint, method: 'GET', message: errorMessage(error), status: error.response?.status }
+      result.failures.push(failure)
+      notify({ type: 'delete-failure', ...failure })
+      continue
+    }
+
+    const summary = { endpoint, attempted: 0, deleted: 0, failed: 0 }
+    result.endpointResults.push(summary)
+    notify({ type: 'delete-start', endpoint, total: rows.length })
+
+    if (rows.length === 0) {
+      notify({
+        type: 'delete-empty',
+        endpoint,
+        message: 'GET succeeded but returned no records in a recognized collection array.',
+      })
+    }
+
+    for (const record of rows) {
+      const id = getRecordId(record)
+      if (id === undefined || id === null) {
+        const failure = { endpoint, method: 'DELETE', record: record.name ?? record.title ?? 'Unknown record', message: 'Record has no id, pk, or uuid field.' }
+        result.failures.push(failure)
+        summary.failed += 1
+        notify({ type: 'delete-failure', ...failure, completed: summary.deleted + summary.failed, total: rows.length })
+        continue
+      }
+
+      summary.attempted += 1
+      try {
+        await axios.delete(requestUrl(api.delete(id)), requestConfig)
+        summary.deleted += 1
+        result.deleted += 1
+        notify({
+          type: 'delete-success',
+          endpoint,
+          record: record.name ?? record.title ?? String(id),
+          id,
+          completed: summary.deleted + summary.failed,
+          total: rows.length,
+        })
+      } catch (error) {
+        const failure = {
+          endpoint,
+          method: 'DELETE',
+          record: record.name ?? record.title ?? String(id),
+          id,
+          message: errorMessage(error),
+          status: error.response?.status,
+        }
+        result.failures.push(failure)
+        summary.failed += 1
+        notify({ type: 'delete-failure', ...failure, completed: summary.deleted + summary.failed, total: rows.length })
+      }
+    }
+
+    notify({ type: 'delete-endpoint-complete', ...summary, total: rows.length })
+  }
+
+  return result
+}
 
 export default automateFunction;

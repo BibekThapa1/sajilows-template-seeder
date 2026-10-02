@@ -1,4 +1,7 @@
 const APIS = {
+    auth: {
+        "login":"/api/v1/user/auth/login/",
+    },
     menu_items: {
         "get":"/api/v1/resturant-menu/menu-item/",
         "post":"/api/v1/resturant-menu/menu-item/",
