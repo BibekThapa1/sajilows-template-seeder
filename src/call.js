@@ -31,7 +31,7 @@ const toRequestBody = async (record) => {
       formData.append(key, await response.blob(), value.split("/").pop() || `${key}.bin`);
     } else if ((key === "facilities" || key === "menu_items") && Array.isArray(value)) {
       for (const id of value) {
-        formData.append(`${key}[]`, String(id));
+        formData.append(key, String(id));
       }
     } else if (Array.isArray(value) || (value && typeof value === "object")) {
       formData.append(key, JSON.stringify(value));
@@ -130,8 +130,8 @@ const automateFunction = async (backendUrl, forwardedHost, accessToken, onProgre
   };
 
   const collectionCache = new Map();
-  const fetchAllRecords = async (postEndpoint) => {
-    if (collectionCache.has(postEndpoint)) return collectionCache.get(postEndpoint);
+  const fetchAllRecords = async (postEndpoint, refresh = false) => {
+    if (!refresh && collectionCache.has(postEndpoint)) return collectionCache.get(postEndpoint);
     const records = [];
     let url = requestUrl(getEndpoint(postEndpoint));
     let pageCount = 0;
@@ -155,6 +155,18 @@ const automateFunction = async (backendUrl, forwardedHost, accessToken, onProgre
   const randomId = (records) => {
     const ids = records.map(getId).filter((id) => id !== undefined);
     return ids.length ? ids[Math.floor(Math.random() * ids.length)] : undefined;
+  };
+
+  const selectRelatedIds = (records) => {
+    const ids = [...new Set(records.map(getId).filter((id) => id !== undefined))];
+    const maximum = Math.min(10, ids.length);
+    const minimum = Math.min(3, maximum);
+    const count = minimum + Math.floor((1 - Math.random() ** 2) * (maximum - minimum + 1));
+    for (let index = ids.length - 1; index > 0; index -= 1) {
+      const swapIndex = Math.floor(Math.random() * (index + 1));
+      [ids[index], ids[swapIndex]] = [ids[swapIndex], ids[index]];
+    }
+    return ids.slice(0, count);
   };
 
   const postRecords = async (endpoint, records, skipReason = "No eligible records to send.") => {
@@ -275,27 +287,28 @@ const automateFunction = async (backendUrl, forwardedHost, accessToken, onProgre
     }
     roomFacilityItemRecords.push({ ...item, category: categoryId });
   }
-  const roomFacilityItemIds = await postRecords(APIS.room_facilities_items.post, roomFacilityItemRecords, "Room-facility items could not be built because no category IDs were available.");
+  await postRecords(APIS.room_facilities_items.post, roomFacilityItemRecords, "Room-facility items could not be built because no category IDs were available.");
 
   const roomTypeIds = await postRecords(APIS.room_type.post, roomTypes);
   const floorIds = await postRecords(APIS.floors.post, floors);
   let existingRoomTypes = [];
   let existingFloors = [];
-  let existingFacilityItems = [];
-  let existingMenuItems = [];
   if (rooms.some((room) => !roomTypeIds.has(room.room_type_name))) existingRoomTypes = await fetchAllRecords(APIS.room_type.post);
   if (rooms.some((room) => !floorIds.has(room.floor_name))) existingFloors = await fetchAllRecords(APIS.floors.post);
-  if (rooms.some((room) => room.facility_names.some((name) => !roomFacilityItemIds.has(name)))) existingFacilityItems = await fetchAllRecords(APIS.room_facilities_items.post);
-  if (rooms.some((room) => room.menu_item_names.some((name) => !menuItemIds.has(name)))) existingMenuItems = await fetchAllRecords(APIS.menu_items.post);
+  const existingFacilityItems = await fetchAllRecords(APIS.room_facilities_items.post, true);
+  const existingMenuItems = await fetchAllRecords(APIS.menu_items.post, true);
   const roomRecords = [];
 
   for (const room of rooms) {
     const roomTypeId = roomTypeIds.get(room.room_type_name) ?? getId(existingRoomTypes.find((item) => item.name === room.room_type_name)) ?? randomId(existingRoomTypes);
     const floorId = floorIds.get(room.floor_name) ?? getId(existingFloors.find((item) => item.name === room.floor_name)) ?? randomId(existingFloors);
-    const facilityIds = room.facility_names.map((name) => roomFacilityItemIds.get(name) ?? getId(existingFacilityItems.find((item) => item.name === name)) ?? randomId(existingFacilityItems));
-    const menuIds = room.menu_item_names.map((name) => menuItemIds.get(name) ?? getId(existingMenuItems.find((item) => item.name === name)) ?? randomId(existingMenuItems));
-    if (roomTypeId === undefined || floorId === undefined || facilityIds.includes(undefined) || menuIds.includes(undefined)) {
-      const missing = [roomTypeId === undefined && "room type", floorId === undefined && "floor", facilityIds.includes(undefined) && "facility", menuIds.includes(undefined) && "menu item"].filter(Boolean);
+    const facilityIds = selectRelatedIds(existingFacilityItems);
+    const menuIds = selectRelatedIds([
+      ...existingMenuItems,
+      ...[...menuItemIds.values()].map((id) => ({ id })),
+    ]);
+    if (roomTypeId === undefined || floorId === undefined) {
+      const missing = [roomTypeId === undefined && "room type", floorId === undefined && "floor"].filter(Boolean);
       result.failures.push({ endpoint: APIS.rooms.post, record: room.name, message: `No backend records with IDs were returned for: ${missing.join(", ")}.` });
       notify({ type: "dependency-blocked", endpoint: APIS.rooms.post, record: room.name, reason: `GET returned no valid ID for ${missing.join(", ")}.` });
       continue;
