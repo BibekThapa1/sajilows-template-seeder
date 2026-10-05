@@ -72,6 +72,16 @@ const APIS = {
         "post":"/api/v1/home-page/benefits/",
         "delete":(id) => `/api/v1/home-page/benefits/${id}/`,
     },
+    leadership: {
+        "get":"/api/v1/aboutus/teams/",
+        "post":"/api/v1/aboutus/teams/",
+        "delete":(id) => `/api/v1/aboutus/teams/${id}/`,
+    },
+    core_values: {
+        "get":"/api/v1/aboutus/core-values/",
+        "post":"/api/v1/aboutus/core-values/",
+        "delete":(id) => `/api/v1/aboutus/core-values/${id}/`,
+    },
     facilities_home_page: {
         "get":"/api/v1/home-page/facilities-home-page/",
         "post":"/api/v1/home-page/facilities-home-page/",

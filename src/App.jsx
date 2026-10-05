@@ -20,6 +20,8 @@ const endpointTitle = (endpoint) => {
     '/api/v1/home-page/awards-and-recognition/': 'Awards & recognition',
     '/api/v1/home-page/benefits/': 'Benefits',
     '/api/v1/home-page/testemonail/': 'Testimonials',
+    '/api/v1/home-page/leadership/': 'Leadership',
+    '/api/v1/home-page/core-values/': 'Core values',
   }
   return titles[endpoint] ?? endpoint
 }

@@ -36,3 +36,5 @@ const mockLeadership=[
         "is_visible": true
     }
 ]
+
+export default mockLeadership;

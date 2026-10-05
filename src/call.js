@@ -14,6 +14,8 @@ import galleryImages from "./mock/gallery/gallery-images/mock.js";
 import awards from "./mock/awards_and_recognition/mock.js";
 import testimonials from "./mock/testemonials/mock.js";
 import benefits from "./mock/benefits/mock.js";
+import leadership from "./mock/leadership/mock.js";
+import coreValues from "./mock/core-values/mock.js";
 
 const isImageField = (key, value) =>
   /image/i.test(key) && typeof value === "string" && value.length > 0;
@@ -337,6 +339,8 @@ const automateFunction = async (backendUrl, forwardedHost, accessToken, onProgre
   await postRecords(APIS.awards_and_recognition.post, awards);
   await postRecords(APIS.benefits.post, benefits);
   await postRecords(APIS.testimonials.post, testimonials);
+  await postRecords(APIS.leadership.post, leadership);
+  await postRecords(APIS.core_values.post, coreValues);
   return result;
 };
 
@@ -367,6 +371,8 @@ export const deleteAllData = async (backendUrl, forwardedHost, accessToken, onPr
     APIS.awards_and_recognition,
     APIS.benefits,
     APIS.testimonials,
+    APIS.leadership,
+    APIS.core_values,
     APIS.room_type,
     APIS.floors,
   ]

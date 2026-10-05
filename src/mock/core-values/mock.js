@@ -25,3 +25,5 @@ const mockCoreValues = [
         is_visible: true 
     }
 ];
+
+export default mockCoreValues;
